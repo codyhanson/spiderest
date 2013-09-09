@@ -1,9 +1,9 @@
 {
-  "name": "spider",
+  "name": "spiderest",
   "version": "0.0.1",
   "private": false,
   "scripts": {
-    "start": "node spider"
+    "start": "node spiderest"
   },
   "dependencies": {
     "async": "latest",
