@@ -5,6 +5,7 @@ var argv = require('optimist')
     .demand(['url'])
     .argv;
 var async = require('async');
+var url = require('url');
 var fs = require('fs');
 var request = require('request');
 var redis = require('redis');
@@ -13,9 +14,10 @@ var redisClient = redis.createClient();
 var concurrency = argv.concurrency || 5; //default to 5 reqs out at a time.
 var authhash = argv.user && argv.pass ? {'user': argv.user, 'pass':argv.pass, 'sendImmediately':'true'} : null;
 
-var baseUrl = argv.url;
+var baseUrlString = argv.url;
 
 var dumpFile = argv.out || 'dump-' + timestampString() + '.json';
+var dumpStarted = false;
 
 /* The get Queue holds hrefs to go get */
 var getQueue = async.queue(getUrl, concurrency);
@@ -28,10 +30,13 @@ getQueue.drain =  function() {
     setTimeout(function(){
         if (getQueue.length() == 0) {
             console.log('10 seconds passed with no activity, exporting to file, and  shutting down.');
-            dumpDbToFile(dumpFile, function(err){
-                //done writing
-                process.exit();
-            });
+            if (!dumpStarted) {
+                dumpStarted = true;
+                dumpDbToFile(dumpFile, function(err){
+                    //done writing
+                    process.exit();
+                });
+            }
         } else {
             console.log('Some work came in since drained, not exiting yet.');
         }
@@ -46,7 +51,7 @@ getQueue.drain =  function() {
 var parseQueue = async.queue(parseForHrefs, 1000); 
 
 //Put the first href into the queue and let it rip.
-getQueue.push({href: baseUrl});
+getQueue.push({href: baseUrlString});
 
 
 function getUrl(task, callback) {
@@ -65,7 +70,7 @@ function getUrl(task, callback) {
             //Check if we have already visited this href before.
             //if we have, we will return and not do any work.
             console.log('GETTING:' + task.href);
-            request( { url: task.href, method: 'GET', auth : authhash},
+            request( { url: task.href, method: 'GET', qs: task.query, auth : authhash},
                 function (error, res, resBody) {
                     if (error){
                         console.log(error);
@@ -81,9 +86,25 @@ function getUrl(task, callback) {
 
                     //submit the object to be 
                     //parsed for hrefs.
-                    parseQueue.push(JSON.parse(resBody));
+                    var parsedBody = JSON.parse(resBody);
+                    parseQueue.push(parsedBody);
 
-                    //todo, pagination over a collection.
+                    //Check if this is a paginated collection.
+                    //pagination fields must be present, and the 'items' array must be filled to the limit.
+                    if (parsedBody.offset != null && parsedBody.limit != null && parsedBody.items.length === parsedBody.limit) {
+                        //this is a URL that we can get another page of.
+                        var urlObj = url.parse(task.href, true);
+                        var newOffset = parsedBody.offset + parsedBody.limit;
+                        var newQueryParams = {offset:newOffset, limit:parsedBody.limit};
+                        //set the new params in the url obj.
+                        urlObj.query = newQueryParams;
+                        var hrefNoParams = url.format(urlObj);
+                        //get the next page.
+                        console.log('new page:' + hrefNoParams);
+                        getQueue.push({href: hrefNoParams});
+                    }
+
+                    //Store this href.
                     storeResult(task.href,resBody, function() {
                         callback(null); //no errors.
                     });
