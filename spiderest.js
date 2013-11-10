@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 
-var argv = require('optimist').argv;
+var argv = require('optimist')
+    .usage('Usage: --user <basic auth user> --pass <basic auth secret> --url <api url to start crawling from>')
+    .demand(['url'])
+    .argv;
 var async = require('async');
+var fs = require('fs');
 var request = require('request');
 var redis = require('redis');
 var redisClient = redis.createClient();
 
-var concurrency = argv.concurrency;
-var authhash = {'user': argv.user, 'pass':argv.pass, 'sendImmediately':'true'};
+var concurrency = argv.concurrency || 5; //default to 5 reqs out at a time.
+var authhash = argv.user && argv.pass ? {'user': argv.user, 'pass':argv.pass, 'sendImmediately':'true'} : null;
 
 var baseUrl = argv.url;
 
+var dumpFile = argv.out || 'dump-' + timestampString() + '.json';
 
 /* The get Queue holds hrefs to go get */
 var getQueue = async.queue(getUrl, concurrency);
@@ -22,8 +27,11 @@ getQueue.drain =  function() {
 
     setTimeout(function(){
         if (getQueue.length() == 0) {
-            console.log('10 seconds passed with no activity, shutting down.');
-            process.exit();
+            console.log('10 seconds passed with no activity, exporting to file, and  shutting down.');
+            dumpDbToFile(dumpFile, function(err){
+                //done writing
+                process.exit();
+            });
         } else {
             console.log('Some work came in since drained, not exiting yet.');
         }
@@ -67,7 +75,8 @@ function getUrl(task, callback) {
                     //check status code, should be 200.
                     if (res.statusCode != 200) {
                         console.log('NOT 200 OK. Failed getting:' + 
-                            task.href + 'with status:' + res.statusCode );
+                            task.href + ' with status:' + res.statusCode );
+                        return callback('error with this request:' + task.href);
                     }
 
                     //submit the object to be 
@@ -115,3 +124,56 @@ function storeResult(key,result,callback) {
     callback();
 }
 
+function dumpDbToFile(filename, callback){
+    var keys = null;
+    var stuffToDump = {};
+    async.series([
+        function(taskCallback){
+            //get all keys.
+            redisClient.keys('*', function(err,res){
+                keys = res;
+                taskCallback();
+            });
+        },
+        function(taskCallback){
+            //get all values
+            async.each(keys,function(key,itemCb){
+                redisClient.get(key,function(err,value){
+                    stuffToDump[key] = value;
+                    if (err) console.log(err);
+                    itemCb(err);
+                });
+            },
+            function(err){
+                taskCallback(err);
+            });
+        },
+        function(taskCallback) {
+            //write to file.
+            console.log('Dumping to file now.');
+            fs.writeFile(filename, JSON.stringify(stuffToDump), function(err){
+                console.log('finished writing file:' + filename);
+                taskCallback(err);
+            });
+        }
+    ],
+    function(err,res){
+        if (err) console.log(err);
+        callback(err);
+    });
+}
+
+
+function timestampString() {
+    // create a new javascript Date object based on the timestamp
+    var date = new Date(Date.now());
+    // hours part from the timestamp
+    var hours = date.getHours();
+    // minutes part from the timestamp
+    var minutes = date.getMinutes();
+    // seconds part from the timestamp
+    var seconds = date.getSeconds();
+    // will display time in 10:30:23 format
+    var formattedTime = hours + ':' + minutes + ':' + seconds;
+    return formattedTime;
+}
