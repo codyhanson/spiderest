@@ -1,73 +1,117 @@
 #!/usr/bin/env node
 
+var argv = require('optimist').argv;
 var async = require('async');
 var request = require('request');
+var redis = require('redis');
+var redisClient = redis.createClient();
 
-var concurrency = 5;
-var authhash = {'user': authUser; 'pass':authPass; 'sendImmediately':'true'};
+var concurrency = argv.concurrency;
+var authhash = {'user': argv.user, 'pass':argv.pass, 'sendImmediately':'true'};
 
-var baseUrl = '';
-var queue = async.queue(getUrl, concurrency);
+var baseUrl = argv.url;
+
+
+/* The get Queue holds hrefs to go get */
+var getQueue = async.queue(getUrl, concurrency);
 
 //setup queue.drain?
-queue.drain =  function() {
-    console.log('drained');
+getQueue.drain =  function() {
+
+    console.log('GET queue drained. waiting for 10 seconds before shutting down.');
+
+    setTimeout(function(){
+        if (getQueue.length() == 0) {
+            console.log('10 seconds passed with no activity, shutting down.');
+            process.exit();
+        } else {
+            console.log('Some work came in since drained, not exiting yet.');
+        }
+    }, 10000);
+
+
 }
 
-//maintain a hash of the hrefs we have visted, so we don't visit more than once.
-//or end up in an infinite loop.
-var visited;
+
+/* the parse queue holds objects to be parsed for hrefs */
+//doesn't matter if it has high concurrency
+var parseQueue = async.queue(parseForHrefs, 1000); 
 
 //Put the first href into the queue and let it rip.
-queue.push({href: baseUrl});
+getQueue.push({href: baseUrl});
 
 
 function getUrl(task, callback) {
 
-    //Check if we have already visited this href before.
-    //if we have, we will return and not do any work.
+    //only get this href if it hasn't been stored already.
+    redisClient.get(task.href, function(err,reply) {
+        if(err){
+            console.log(err);
+            return callback(err); 
+        } else if (reply != null) {
+            //we've already gotten this href before.
+            console.log('Skipping:' +task.href);
+            return callback(); 
+        } else {
+            //otherwise, this is a new href.
+            //Check if we have already visited this href before.
+            //if we have, we will return and not do any work.
+            console.log('GETTING:' + task.href);
+            request( { url: task.href, method: 'GET', auth : authhash},
+                function (error, res, resBody) {
+                    if (error){
+                        console.log(error);
+                        return callback(error); //bail out.
+                    }
 
-    request(
-        {
-            url: task.href,
-            method: 'GET',
-            auth : authhash, 
-        },
-        function (error, res, resBody) {
-            if (error){
-                callback(error); //bail out.
-                return;
-            }
+                    //check status code, should be 200.
+                    if (res.statusCode != 200) {
+                        console.log('NOT 200 OK. Failed getting:' + 
+                            task.href + 'with status:' + res.statusCode );
+                    }
 
-            //check status code, should be 200.
-            //todo res.status_code;
+                    //submit the object to be 
+                    //parsed for hrefs.
+                    parseQueue.push(JSON.parse(resBody));
 
-            //todo, crawl over resBody looking for hrefs.
-            
-
-            //todo exclude hrefs that match a regex?
-
-            //add this href to our visited list.
-            //todo
-            
-            //Also, add any embedded hrefs to be visited.
-            queue.push({href: resBody.href});
-
-            //todo, pagination over a collection.
-
-            storeResult(resBody, function() {
-                
-                callback(null); //no errors.
-            });
+                    //todo, pagination over a collection.
+                    storeResult(task.href,resBody, function() {
+                        callback(null); //no errors.
+                    });
+                }
+            );
         }
-    );
+    });
 }
 
+function parseForHrefs(object, callback) {
+    //first check if object is even an object.
+    if (!(object instanceof Object)) return callback();
 
-function storeResult(result,callback) {
+    for(attr in object) {
+        //is it an href?
+        if (attr == 'href') {
+            getQueue.push({href:object[attr]});
+        } else if (Array.isArray(object[attr])) {
+            //is it an array?
+            //if so, push the objects that are in the array.
+            for (var i = 0; i < object[attr].length; i++){
+                parseQueue.push(object[attr][i]);
+            }
+        } else if (object[attr] instanceof Object) {
+            //is it an object?
+            //if so, we want to add to the parse queue.
+            parseQueue.push(object[attr]);
+        }
+    }
+    //done with this object.
+    return callback();
+}
 
-    //todo, write to a file, or a db, or stdout.
-    //based on a command line option?
-    console.log(result);
+function storeResult(key,result,callback) {
+    //stuff it in redis.
+    redisClient.set(key, result);
+    //console.log(result);
     callback();
 }
+
