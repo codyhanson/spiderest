@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 
 var argv = require('optimist')
-    .usage('Usage: --user <basic auth user> --pass <basic auth secret> --url <api url to start crawling from>')
-    .demand(['url'])
+    .usage('Usage: spiderest.js [OPTIONS]')
+    .option('u', {alias: 'url'})
+    .option('a', {alias: 'user', default: null})
+    .option('p', {alias: 'pass', default: null})
+    .option('c', {alias: 'concurrency', default: 5})
+    .option('o', {alias: 'out', default: 'dump-' + timestampString() + '.json'})
+    .demand('url')
     .argv;
 var async = require('async');
 var url = require('url');
@@ -11,12 +16,12 @@ var request = require('request');
 var redis = require('redis');
 var redisClient = redis.createClient();
 
-var concurrency = argv.concurrency || 5; //default to 5 reqs out at a time.
+var concurrency = argv.concurrency; //default to 5 reqs out at a time.
 var authhash = argv.user && argv.pass ? {'user': argv.user, 'pass':argv.pass, 'sendImmediately':'true'} : null;
 
 var baseUrlString = argv.url;
 
-var dumpFile = argv.out || 'dump-' + timestampString() + '.json';
+var dumpFile = argv.out;
 var dumpStarted = false;
 
 /* The get Queue holds hrefs to go get */
