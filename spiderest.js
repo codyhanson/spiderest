@@ -24,6 +24,16 @@ var baseUrlString = argv.url;
 var dumpFile = argv.out;
 var dumpStarted = false;
 
+/*
+TODO
+ //    .option('f', {alias: 'flushdb', default: false})
+if (argv.flushdb) {
+    //flush redis.
+    //not sure which command.
+    redisClient.flushdb()?
+}
+*/
+
 /* The get Queue holds hrefs to go get */
 var getQueue = async.queue(getUrl, concurrency);
 
@@ -103,10 +113,11 @@ function getUrl(task, callback) {
                         var newQueryParams = {offset:newOffset, limit:parsedBody.limit};
                         //set the new params in the url obj.
                         urlObj.query = newQueryParams;
-                        var hrefNoParams = url.format(urlObj);
+                        urlObj.search = null; //clear it out so the query gets reset.
+                        var hrefNewParams = url.format(urlObj);
                         //get the next page.
-                        console.log('new page:' + hrefNoParams);
-                        getQueue.push({href: hrefNoParams});
+                        console.log('new page:' + hrefNewParams);
+                        getQueue.push({href: hrefNewParams});
                     }
 
                     //Store this href.

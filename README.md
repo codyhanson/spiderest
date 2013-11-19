@@ -27,6 +27,8 @@ Available options:
  - `--out` filename of where the json will be written to. Will truncate the file. default is `dump-<timestamp>.json`.
 
 ##Todo List:
- - [ ] Support pagination ('offset' and 'limit' to start).
+ - [X] Support pagination ('offset' and 'limit' to start).
  - [ ] Make redis url configurable.
  - [ ] Make the 'href' keyword configurable.
+ - [ ] option to flush redis at the start.
+ - [ ] option to set the limit for pagination.
